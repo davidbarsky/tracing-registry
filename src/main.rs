@@ -97,7 +97,9 @@ impl Registry {
     }
 }
 
-pub static CURRENT_SPAN: AtomicU64 = AtomicU64::new(1);
+thread_local! {
+    pub static CURRENT_SPAN: AtomicU64 = AtomicU64::new(1);
+}
 impl Subscriber for Registry {
     fn register_callsite(&self, _: &'static Metadata<'static>) -> Interest {
         Interest::always()
@@ -118,7 +120,7 @@ impl Subscriber for Registry {
             events: vec![],
         };
         let id = (self.insert(s).expect("Unable to allocate another span") + 1) as u64;
-        let id = CURRENT_SPAN.swap(id, Ordering::SeqCst);
+        let id = CURRENT_SPAN.with(|s| s.swap(id, Ordering::SeqCst));
         Id::from_u64(id.try_into().unwrap())
     }
 
@@ -134,7 +136,9 @@ impl Subscriber for Registry {
 
     fn enter(&self, id: &span::Id) {
         let id = id.into_u64();
-        CURRENT_SPAN.store(id, Ordering::SeqCst);
+        CURRENT_SPAN.with(|s| {
+            s.store(id, Ordering::SeqCst);
+        });
     }
 
     fn event(&self, event: &Event<'_>) {
@@ -142,7 +146,7 @@ impl Subscriber for Registry {
             Some(id) => Some(id.clone()),
             None => {
                 if event.is_contextual() {
-                    let id = CURRENT_SPAN.load(Ordering::SeqCst);
+                    let id = CURRENT_SPAN.with(|s| s.load(Ordering::SeqCst));
                     Some(span::Id::from_u64(id))
                 } else {
                     None
