@@ -4,7 +4,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tracing::field::{Field, Visit};
 use tracing::span::Id;
@@ -46,7 +46,7 @@ struct BigSpan {
 
 #[derive(Debug)]
 struct BigEvent {
-    parent: usize,
+    parent: Id,
     metadata: &'static Metadata<'static>,
     values: HashMap<&'static str, Value>,
 }
@@ -66,16 +66,19 @@ pub trait Extensions {
 #[derive(Debug)]
 struct Registry {
     spans: Arc<Slab<Mutex<BigSpan>>>,
-    events: Arc<Slab<BigEvent>>,
 }
 
 impl Default for Registry {
     fn default() -> Self {
         Self {
             spans: Arc::new(Slab::new()),
-            events: Arc::new(Slab::new()),
         }
     }
+}
+
+fn convert_id(id: Id) -> usize {
+    let id: usize = id.into_u64().try_into().unwrap();
+    id - 1
 }
 
 impl Registry {
@@ -83,23 +86,24 @@ impl Registry {
         self.spans.insert(Mutex::new(s))
     }
 
-    fn get(&self, id: usize) -> Option<Guard<Mutex<BigSpan>>> {
+    fn get(&self, id: Id) -> Option<Guard<Mutex<BigSpan>>> {
+        let id = convert_id(id);
         self.spans.get(id)
     }
 
-    /// if `true` is returned, then the span was successfully removed.
-    fn remove(&self, id: usize) -> bool {
-        self.spans.remove(id)
+    fn take(&self, id: Id) -> Option<Mutex<BigSpan>> {
+        let id = convert_id(id);
+        self.spans.take(id)
     }
 }
 
-static CURRENT_SPAN: AtomicUsize = AtomicUsize::new(0);
+pub static CURRENT_SPAN: AtomicU64 = AtomicU64::new(1);
 impl Subscriber for Registry {
     fn register_callsite(&self, _: &'static Metadata<'static>) -> Interest {
         Interest::always()
     }
 
-    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+    fn enabled(&self, _: &Metadata<'_>) -> bool {
         true
     }
 
@@ -110,16 +114,16 @@ impl Subscriber for Registry {
         attrs.record(&mut visitor);
         let s = BigSpan {
             metadata: attrs.metadata(),
-            values: values,
+            values,
             events: vec![],
         };
-        let id = self.insert(s).expect("Unable to allocate another span") + 1;
-        CURRENT_SPAN.swap(id, Ordering::SeqCst);
+        let id = (self.insert(s).expect("Unable to allocate another span") + 1) as u64;
+        let id = CURRENT_SPAN.swap(id, Ordering::SeqCst);
         Id::from_u64(id.try_into().unwrap())
     }
 
     #[inline]
-    fn record(&self, span: &span::Id, values: &span::Record<'_>) {
+    fn record(&self, _span: &span::Id, _values: &span::Record<'_>) {
         // self.spans.record(span, values, &self.fmt_fields)
         // unimplemented!()
     }
@@ -129,8 +133,8 @@ impl Subscriber for Registry {
     }
 
     fn enter(&self, id: &span::Id) {
-        // self.spans.push(id);
-        // unimplemented!()
+        let id = id.into_u64();
+        CURRENT_SPAN.store(id, Ordering::SeqCst);
     }
 
     fn event(&self, event: &Event<'_>) {
@@ -139,7 +143,7 @@ impl Subscriber for Registry {
             None => {
                 if event.is_contextual() {
                     let id = CURRENT_SPAN.load(Ordering::SeqCst);
-                    Some(span::Id::from_u64(id.try_into().unwrap()))
+                    Some(span::Id::from_u64(id))
                 } else {
                     None
                 }
@@ -149,9 +153,7 @@ impl Subscriber for Registry {
             let mut values = HashMap::new();
             let mut visitor = RegistryVisitor(&mut values);
             event.record(&mut visitor);
-            let id: usize = id.into_u64().try_into().unwrap();
-            let id = id - 1;
-            let span = self.get(id).expect("Missing parent span for event");
+            let span = self.get(id.clone()).expect("Missing parent span for event");
             let mut span = span.lock().expect("Mutex poisoned");
             let event = BigEvent {
                 parent: id,
@@ -162,29 +164,17 @@ impl Subscriber for Registry {
         }
     }
 
-    fn exit(&self, id: &span::Id) {
-        let id: usize = id.into_u64().try_into().unwrap();
-        let id = id - 1;
-        let span = self.spans.get(id);
-        dbg!(span);
-    }
+    fn exit(&self, _id: &span::Id) {}
 
     #[inline]
     fn try_close(&self, id: span::Id) -> bool {
-        self.spans.remove(id.into_u64() as usize)
+        let span = self.take(id);
+        dbg!(span);
+        true
     }
 }
 
 fn main() {
-    // let registry = Registry::default();
-
-    // let key = registry.insert(String::from("hello world")).unwrap();
-    // let hello = registry.get(key).expect("item missing");
-    // let mut hello = hello.lock().expect("mutex poisoned");
-    // *hello = String::from("hello, world!");
-    // drop(hello);
-
-    // dbg!(&registry.get(key));
     tracing::subscriber::set_global_default(Registry::default())
         .expect("Could not set global default");
 
