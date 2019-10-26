@@ -1,11 +1,13 @@
 use serde_json::{json, Value};
 use sharded_slab::{Guard, Slab};
+
 use std::any::Any;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+
 use tracing::field::{Field, Visit};
 use tracing::span::Id;
 use tracing::{info, span, Event, Level, Metadata};
@@ -98,8 +100,9 @@ impl Registry {
 }
 
 thread_local! {
-    pub static CURRENT_SPAN: AtomicU64 = AtomicU64::new(1);
+    pub static CURRENT_SPAN: Cell<u64> = Cell::new(1);
 }
+
 impl Subscriber for Registry {
     fn register_callsite(&self, _: &'static Metadata<'static>) -> Interest {
         Interest::always()
@@ -120,7 +123,7 @@ impl Subscriber for Registry {
             events: vec![],
         };
         let id = (self.insert(s).expect("Unable to allocate another span") + 1) as u64;
-        let id = CURRENT_SPAN.with(|s| s.swap(id, Ordering::SeqCst));
+        let id = CURRENT_SPAN.with(|s| s.replace(id));
         Id::from_u64(id.try_into().unwrap())
     }
 
@@ -136,9 +139,7 @@ impl Subscriber for Registry {
 
     fn enter(&self, id: &span::Id) {
         let id = id.into_u64();
-        CURRENT_SPAN.with(|s| {
-            s.store(id, Ordering::SeqCst);
-        });
+        CURRENT_SPAN.with(|s| s.set(id));
     }
 
     fn event(&self, event: &Event<'_>) {
@@ -146,7 +147,7 @@ impl Subscriber for Registry {
             Some(id) => Some(id.clone()),
             None => {
                 if event.is_contextual() {
-                    let id = CURRENT_SPAN.with(|s| s.load(Ordering::SeqCst));
+                    let id = CURRENT_SPAN.with(|s| s.get());
                     Some(span::Id::from_u64(id))
                 } else {
                     None
