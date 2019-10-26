@@ -100,7 +100,7 @@ impl Registry {
 }
 
 thread_local! {
-    pub static CURRENT_SPAN: Cell<u64> = Cell::new(1);
+    pub static CURRENT_SPAN: Cell<Option<u64>> = Cell::new(Some(1));
 }
 
 impl Subscriber for Registry {
@@ -123,7 +123,6 @@ impl Subscriber for Registry {
             events: vec![],
         };
         let id = (self.insert(s).expect("Unable to allocate another span") + 1) as u64;
-        let id = CURRENT_SPAN.with(|s| s.replace(id));
         Id::from_u64(id.try_into().unwrap())
     }
 
@@ -139,7 +138,7 @@ impl Subscriber for Registry {
 
     fn enter(&self, id: &span::Id) {
         let id = id.into_u64();
-        CURRENT_SPAN.with(|s| s.set(id));
+        CURRENT_SPAN.with(|s| s.set(Some(id)));
     }
 
     fn event(&self, event: &Event<'_>) {
@@ -148,6 +147,7 @@ impl Subscriber for Registry {
             None => {
                 if event.is_contextual() {
                     let id = CURRENT_SPAN.with(|s| s.get());
+                    let id = id.expect("Contextual span ID not found");
                     Some(span::Id::from_u64(id))
                 } else {
                     None
@@ -169,7 +169,9 @@ impl Subscriber for Registry {
         }
     }
 
-    fn exit(&self, _id: &span::Id) {}
+    fn exit(&self, _id: &span::Id) {
+        CURRENT_SPAN.with(|s| s.take());
+    }
 
     #[inline]
     fn try_close(&self, id: span::Id) -> bool {
@@ -186,6 +188,6 @@ fn main() {
     let span = span!(Level::INFO, "my_loop");
     let _entered = span.enter();
     for i in 0..10 {
-        info!(iteration = i, "In a span!");
+        span!(Level::INFO, "iteration").in_scope(|| info!(iteration = i, "In a span!"));
     }
 }
