@@ -12,9 +12,27 @@ use tracing::field::{Field, Visit};
 use tracing::span::Id;
 use tracing::{info, span, Event, Level, Metadata};
 use tracing_core::{Interest, Subscriber};
+use tracing_subscriber::{layer::Context, Layer};
+
+#[derive(Debug, Default)]
+pub struct StdoutLayer<S: Subscriber> {
+    inner: S,
+}
+
+#[derive(Debug, Default)]
+pub struct StderrLayer {}
+
+impl<'a, S: Subscriber + LookupSpan<'a>> Layer<S> for StdoutLayer<S> {
+    fn on_close(&self, id: Id, ctx: Context<S>) {
+        let span = self.inner.span(&id);
+        dbg!(span);
+    }
+}
+
+impl<S: Subscriber> Layer<S> for StderrLayer {}
 
 pub trait LookupSpan<'a> {
-    type Span: SpanData<'a>;
+    type Span: SpanData<'a> + fmt::Debug;
     fn span(&'a self, id: &Id) -> Option<Self::Span>;
 }
 
@@ -109,8 +127,8 @@ impl Registry {
         self.spans.insert(s)
     }
 
-    fn get(&self, id: Id) -> Option<Guard<BigSpan>> {
-        self.spans.get(convert_id(id))
+    fn get(&self, id: &Id) -> Option<Guard<BigSpan>> {
+        self.spans.get(convert_id(id.clone()))
     }
 
     fn take(&self, id: Id) -> Option<BigSpan> {
@@ -178,7 +196,7 @@ impl Subscriber for Registry {
             let mut values = HashMap::new();
             let mut visitor = RegistryVisitor(&mut values);
             event.record(&mut visitor);
-            let span = self.get(id.clone()).expect("Missing parent span for event");
+            let span = self.get(&id).expect("Missing parent span for event");
             let event = BigEvent {
                 parent: id,
                 metadata: event.metadata(),
@@ -195,21 +213,22 @@ impl Subscriber for Registry {
     #[inline]
     fn try_close(&self, id: span::Id) -> bool {
         let span = self.take(id);
-        dbg!(span);
+        // dbg!(span);
         true
     }
 }
 
 impl<'a> LookupSpan<'a> for Registry {
     type Span = Guard<'a, BigSpan>;
+
     fn span(&'a self, id: &Id) -> Option<Self::Span> {
-        self.get(id.clone())
+        self.get(id)
     }
 }
 
 fn main() {
-    tracing::subscriber::set_global_default(Registry::default())
-        .expect("Could not set global default");
+    let subscriber = Registry::default();
+    tracing::subscriber::set_global_default(subscriber).expect("Could not set global default");
 
     let span = span!(Level::INFO, "my_loop");
     let _entered = span.enter();
