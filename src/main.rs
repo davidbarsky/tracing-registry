@@ -22,7 +22,7 @@ pub struct StdoutLayer<S: Subscriber> {
 #[derive(Debug, Default)]
 pub struct StderrLayer {}
 
-impl<'a, S: Subscriber + LookupSpan<'a>> Layer<S> for StdoutLayer<S> {
+impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for StdoutLayer<S> {
     fn on_close(&self, id: Id, ctx: Context<S>) {
         let span = self.inner.span(&id);
         dbg!(span);
