@@ -13,20 +13,20 @@ use tracing::span::Id;
 use tracing::{info, span, Event, Level, Metadata};
 use tracing_core::{Interest, Subscriber};
 
-pub trait LookupSpan {
-    type Span: SpanData;
-    fn span(&self, id: &Id) -> Option<Self::Span>;
+pub trait LookupSpan<'a> {
+    type Span: SpanData<'a>;
+    fn span(&'a self, id: &Id) -> Option<Self::Span>;
 }
 
-pub trait SpanData {
-    type Children: Iterator<Item = Id>;
-    type Follows: Iterator<Item = Id>;
+pub trait SpanData<'a> {
+    type Children: Iterator<Item = &'a Id>;
+    type Follows: Iterator<Item = &'a Id>;
 
-    fn id(&self) -> Option<Id>;
+    fn id(&self) -> &Id;
     fn metadata(&self) -> &'static Metadata<'static>;
-    fn parent(&self) -> Option<Id>;
-    fn children(&self) -> Self::Children;
-    fn follows_from(&self) -> Self::Follows;
+    fn parent(&self) -> Option<&Id>;
+    fn children(&'a self) -> Self::Children;
+    fn follows_from(&'a self) -> Self::Follows;
 }
 
 struct RegistryVisitor<'a>(&'a mut HashMap<&'static str, Value>);
@@ -39,11 +39,32 @@ impl<'a> Visit for RegistryVisitor<'a> {
     }
 }
 
+impl<'a> SpanData<'a> for Guard<'a, BigSpan> {
+    type Children = std::slice::Iter<'a, Id>; // not yet implemented...
+    type Follows = std::slice::Iter<'a, Id>;
+
+    fn id(&self) -> &Id {
+        unimplemented!("david: add this to `BigSpan`")
+    }
+    fn metadata(&self) -> &'static Metadata<'static> {
+        (*self).metadata
+    }
+    fn parent(&self) -> Option<&Id> {
+        unimplemented!("david: add this to `BigSpan`")
+    }
+    fn children(&self) -> Self::Children {
+        unimplemented!("david: add this to `BigSpan`")
+    }
+    fn follows_from(&self) -> Self::Follows {
+        unimplemented!("david: add this to `BigSpan`")
+    }
+}
+
 #[derive(Debug)]
 struct BigSpan {
     metadata: &'static Metadata<'static>,
-    values: HashMap<&'static str, Value>,
-    events: Vec<BigEvent>,
+    values: Mutex<HashMap<&'static str, Value>>,
+    events: Mutex<Vec<BigEvent>>,
 }
 
 #[derive(Debug)]
@@ -67,7 +88,7 @@ pub trait Extensions {
 
 #[derive(Debug)]
 struct Registry {
-    spans: Arc<Slab<Mutex<BigSpan>>>,
+    spans: Arc<Slab<BigSpan>>,
 }
 
 impl Default for Registry {
@@ -85,15 +106,14 @@ fn convert_id(id: Id) -> usize {
 
 impl Registry {
     fn insert(&self, s: BigSpan) -> Option<usize> {
-        self.spans.insert(Mutex::new(s))
+        self.spans.insert(s)
     }
 
-    fn get(&self, id: Id) -> Option<Guard<Mutex<BigSpan>>> {
-        let id = convert_id(id);
-        self.spans.get(id)
+    fn get(&self, id: Id) -> Option<Guard<BigSpan>> {
+        self.spans.get(convert_id(id))
     }
 
-    fn take(&self, id: Id) -> Option<Mutex<BigSpan>> {
+    fn take(&self, id: Id) -> Option<BigSpan> {
         let id = convert_id(id);
         self.spans.take(id)
     }
@@ -119,8 +139,8 @@ impl Subscriber for Registry {
         attrs.record(&mut visitor);
         let s = BigSpan {
             metadata: attrs.metadata(),
-            values,
-            events: vec![],
+            values: Mutex::new(values),
+            events: Mutex::new(vec![]),
         };
         let id = (self.insert(s).expect("Unable to allocate another span") + 1) as u64;
         Id::from_u64(id.try_into().unwrap())
@@ -159,13 +179,12 @@ impl Subscriber for Registry {
             let mut visitor = RegistryVisitor(&mut values);
             event.record(&mut visitor);
             let span = self.get(id.clone()).expect("Missing parent span for event");
-            let mut span = span.lock().expect("Mutex poisoned");
             let event = BigEvent {
                 parent: id,
                 metadata: event.metadata(),
                 values,
             };
-            span.events.push(event);
+            span.events.lock().expect("Mutex poisoned").push(event);
         }
     }
 
@@ -178,6 +197,13 @@ impl Subscriber for Registry {
         let span = self.take(id);
         dbg!(span);
         true
+    }
+}
+
+impl<'a> LookupSpan<'a> for Registry {
+    type Span = Guard<'a, BigSpan>;
+    fn span(&'a self, id: &Id) -> Option<Self::Span> {
+        self.get(id.clone())
     }
 }
 
