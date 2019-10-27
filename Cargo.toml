@@ -4,14 +4,26 @@ version = "0.1.0"
 authors = ["David Barsky <dbarsky@amazon.com>"]
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+default = ["chrono", "ansi", "tracing-log", "json"]
+time = ["chrono"]
+ansi = ["ansi_term"]
+log = ["tracing-log"]
+json = ["serde", "tracing-serde"]
 
 [dependencies]
 sharded-slab = "0.0.4"
 tracing = { git = "https://github.com/tokio-rs/tracing" }
 tracing-subscriber = { git = "https://github.com/tokio-rs/tracing" }
+tracing-serde = { git = "https://github.com/tokio-rs/tracing", optional = true }
 tracing-core = { git = "https://github.com/tokio-rs/tracing" }
 serde_json = "1"
+ansi_term = { version = "0.12.1", optional = true }
+chrono = {version = "0.4.9", optional = true }
+tracing-log = { version = "0.1", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+owning_ref = "0.4.0"
+lazy_static = "1.4.0"
 
 [patch.crates-io]
 tracing-core = { git = "https://github.com/tokio-rs/tracing" }

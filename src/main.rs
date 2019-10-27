@@ -1,20 +1,38 @@
 use serde_json::{json, Value};
 use sharded_slab::{Guard, Slab};
 
-use std::any::Any;
-use std::cell::Cell;
-use std::collections::HashMap;
-use std::convert::TryInto;
-use std::fmt;
-use std::io;
-use std::sync::{Arc, Mutex};
+use std::{
+    any::Any,
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    convert::TryInto,
+    fmt, io,
+    marker::PhantomData,
+    sync::{Arc, Mutex},
+};
 
-use std::marker::PhantomData;
-use tracing::field::{Field, Visit};
-use tracing::span::Id;
-use tracing::{error, info, span, Event, Level, Metadata};
+use tracing::{
+    error,
+    field::{Field, Visit},
+    info, span,
+    span::Id,
+    Event, Level, Metadata,
+};
 use tracing_core::{Interest, Subscriber};
 use tracing_subscriber::{layer::Context, Layer};
+
+pub mod context;
+pub mod field;
+pub mod format;
+pub mod sync;
+mod thread;
+pub mod time;
+
+use sync::RwLock;
+
+mod sealed {
+    pub trait Sealed<A = ()> {}
+}
 
 /// A type that can create [`io::Write`] instances.
 ///
@@ -130,7 +148,9 @@ where
     fn on_close(&self, id: Id, ctx: Context<S>) {}
 
     fn on_event(&self, event: &Event, ctx: Context<S>) {
-        if (self.is_interested)(event) {}
+        if (self.is_interested)(event) {
+            println!("{:?}", event);
+        }
     }
 }
 
@@ -210,12 +230,14 @@ pub trait Extensions {
 #[derive(Debug)]
 struct Registry {
     spans: Arc<Slab<BigSpan>>,
+    local_spans: RwLock<SpanStack>,
 }
 
 impl Default for Registry {
     fn default() -> Self {
         Self {
             spans: Arc::new(Slab::new()),
+            local_spans: RwLock::new(SpanStack::new()),
         }
     }
 }
@@ -240,8 +262,91 @@ impl Registry {
     }
 }
 
+#[derive(Debug)]
+struct ContextId {
+    id: Id,
+    duplicate: bool,
+}
+
+#[derive(Debug)]
+struct SpanStack {
+    stack: Vec<ContextId>,
+    ids: HashSet<Id>,
+}
+
+impl SpanStack {
+    fn new() -> Self {
+        SpanStack {
+            stack: vec![],
+            ids: HashSet::new(),
+        }
+    }
+
+    fn push(&mut self, id: Id) {
+        let duplicate = self.ids.contains(&id);
+        if !duplicate {
+            self.ids.insert(id.clone());
+        }
+        self.stack.push(ContextId { id, duplicate })
+    }
+
+    fn pop(&mut self, expected_id: &Id) -> Option<Id> {
+        if &self.stack.last()?.id == expected_id {
+            let ContextId { id, duplicate } = self.stack.pop()?;
+            if !duplicate {
+                self.ids.remove(&id);
+            }
+            Some(id)
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn current(&self) -> Option<&Id> {
+        self.stack
+            .iter()
+            .rev()
+            .find(|context_id| !context_id.duplicate)
+            .map(|context_id| &context_id.id)
+    }
+}
+
+/// Tracks the currently executing span on a per-thread basis.
+#[derive(Debug)]
+pub struct CurrentSpan {
+    current: thread::Local<Vec<Id>>,
+}
+
+impl CurrentSpan {
+    /// Returns a new `CurrentSpan`.
+    pub fn new() -> Self {
+        Self {
+            current: thread::Local::new(),
+        }
+    }
+
+    /// Returns the [`Id`](::Id) of the span in which the current thread is
+    /// executing, or `None` if it is not inside of a span.
+    pub fn id(&self) -> Option<Id> {
+        self.current.with(|current| current.last().cloned())?
+    }
+
+    /// Records that the current thread has entered the span with the provided ID.
+    pub fn enter(&self, span: Id) {
+        self.current.with(|current| current.push(span));
+    }
+
+    /// Records that the current thread has exited a span.
+    pub fn exit(&self) {
+        self.current.with(|current| {
+            let _ = current.pop();
+        });
+    }
+}
+
 thread_local! {
-    pub static CURRENT_SPAN: Cell<Option<u64>> = Cell::new(Some(1));
+    static CONTEXT: RefCell<SpanStack> = RefCell::new(SpanStack::new());
 }
 
 impl Subscriber for Registry {
@@ -279,7 +384,10 @@ impl Subscriber for Registry {
 
     fn enter(&self, id: &span::Id) {
         let id = id.into_u64();
-        CURRENT_SPAN.with(|s| s.set(Some(id)));
+        self.local_spans
+            .write()
+            .expect("Mutex poisoned")
+            .push(span::Id::from_u64(id));
     }
 
     fn event(&self, event: &Event<'_>) {
@@ -287,8 +395,11 @@ impl Subscriber for Registry {
             Some(id) => Some(id.clone()),
             None => {
                 if event.is_contextual() {
-                    let id = CURRENT_SPAN.with(|s| s.get());
-                    id.map(span::Id::from_u64)
+                    self.local_spans
+                        .read()
+                        .expect("Mutex poisoned")
+                        .current()
+                        .map(|id| id.clone())
                 } else {
                     None
                 }
@@ -308,8 +419,8 @@ impl Subscriber for Registry {
         }
     }
 
-    fn exit(&self, _id: &span::Id) {
-        CURRENT_SPAN.with(|s| s.take());
+    fn exit(&self, id: &span::Id) {
+        self.local_spans.write().expect("Mutex poisoned").pop(id);
     }
 
     #[inline]
