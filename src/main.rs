@@ -9,6 +9,7 @@ use std::fmt;
 use std::io;
 use std::sync::{Arc, Mutex};
 
+use io::Stdout;
 use std::marker::PhantomData;
 use tracing::field::{Field, Visit};
 use tracing::span::Id;
@@ -66,17 +67,17 @@ where
 
 pub struct ConsoleLayer<S: Subscriber, W>
 where
-    W: MakeWriter + Send + Sync + 'static,
+    W: MakeWriter + Send + Sync,
 {
     is_interested: Box<dyn Fn(&Event<'_>) -> bool + Send + Sync + 'static>,
     make_writer: W,
     inner: PhantomData<S>,
 }
 
-pub struct ConsoleLayerBuilder<S, W = fn() -> io::Stdout>
+pub struct ConsoleLayerBuilder<S, W>
 where
     S: Subscriber,
-    W: MakeWriter + Send + Sync + 'static,
+    W: MakeWriter + Send + Sync,
 {
     is_interested: Box<dyn Fn(&Event<'_>) -> bool + Send + Sync + 'static>,
     make_writer: W,
@@ -86,9 +87,9 @@ where
 impl<S, W> ConsoleLayer<S, W>
 where
     S: Subscriber,
-    W: MakeWriter + Send + Sync + 'static,
+    W: MakeWriter + Send + Sync,
 {
-    fn builder() -> ConsoleLayerBuilder<S> {
+    fn builder() -> ConsoleLayerBuilder<S, W> {
         ConsoleLayerBuilder::default()
     }
 }
@@ -96,7 +97,7 @@ where
 impl<S, W> ConsoleLayerBuilder<S, W>
 where
     S: Subscriber,
-    W: MakeWriter + Send + Sync + 'static,
+    W: MakeWriter + Send + Sync,
 {
     fn with_interest<F>(&mut self, f: F) -> &mut Self
     where
@@ -120,9 +121,10 @@ where
     }
 }
 
-impl<S> Default for ConsoleLayerBuilder<S>
+impl<S, W> Default for ConsoleLayerBuilder<S, W>
 where
     S: Subscriber,
+    W: MakeWriter + Send + Sync,
 {
     fn default() -> Self {
         Self {
@@ -346,7 +348,7 @@ fn main() {
 
     let stdout = ConsoleLayer::builder()
         .with_interest(|event| event.metadata().level() == &Level::INFO)
-        .with_writer(io::stdout)
+        .with_writer(io::stdout())
         .build();
 
     let subscriber = stdout.with_subscriber(Registry::default());
