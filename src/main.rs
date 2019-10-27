@@ -28,6 +28,7 @@ pub mod sync;
 mod thread;
 pub mod time;
 
+use crate::format::{FormatEvent, FormatFields};
 use sync::RwLock;
 
 mod sealed {
@@ -82,34 +83,44 @@ where
     }
 }
 
-pub struct ConsoleLayer<S: Subscriber>
-where
-    S: Subscriber,
-{
+pub struct ConsoleLayer<
+    S = Registry,
+    N = format::DefaultFields,
+    E = format::Format<format::Full>,
+    W = fn() -> io::Stdout,
+> {
+    is_interested: Box<dyn Fn(&Event<'_>) -> bool + Send + Sync + 'static>,
+    inner: PhantomData<S>,
+    make_writer: W,
+    fmt_fields: N,
+    fmt_event: E,
+}
+
+pub struct ConsoleLayerBuilder<
+    S = Registry,
+    N = format::DefaultFields,
+    E = format::Format<format::Full>,
+    W = fn() -> io::Stdout,
+> {
+    fmt_fields: N,
+    fmt_event: E,
+    make_writer: W,
     is_interested: Box<dyn Fn(&Event<'_>) -> bool + Send + Sync + 'static>,
     inner: PhantomData<S>,
 }
 
-pub struct ConsoleLayerBuilder<S>
-where
-    S: Subscriber,
-{
-    is_interested: Box<dyn Fn(&Event<'_>) -> bool + Send + Sync + 'static>,
-    inner: PhantomData<S>,
-}
-
-impl<S> ConsoleLayer<S>
-where
-    S: Subscriber,
-{
-    fn builder() -> ConsoleLayerBuilder<S> {
+impl ConsoleLayer {
+    fn builder() -> ConsoleLayerBuilder {
         ConsoleLayerBuilder::default()
     }
 }
 
-impl<S> ConsoleLayerBuilder<S>
+impl<S, N, E, W> ConsoleLayerBuilder<S, N, E, W>
 where
     S: Subscriber,
+    N: for<'writer> FormatFields<'writer> + 'static,
+    E: FormatEvent<N> + 'static,
+    W: MakeWriter + 'static,
 {
     fn with_interest<F>(self, f: F) -> Self
     where
@@ -120,36 +131,108 @@ where
             ..self
         }
     }
+}
 
-    fn build(self) -> ConsoleLayer<S> {
-        ConsoleLayer {
+// this needs to be a seperate impl block because we're re-assigning the the W2 (make_writer)
+// type paramater from the default.
+impl<S, N, E, W> ConsoleLayerBuilder<S, N, E, W> {
+    pub fn with_writer<W2>(self, make_writer: W2) -> ConsoleLayerBuilder<S, N, E, W2>
+    where
+        W2: MakeWriter + 'static,
+    {
+        ConsoleLayerBuilder {
+            fmt_fields: self.fmt_fields,
+            fmt_event: self.fmt_event,
             is_interested: self.is_interested,
             inner: self.inner,
+            make_writer,
         }
     }
 }
 
-impl<S> Default for ConsoleLayerBuilder<S>
+impl<S, N, E, W> ConsoleLayerBuilder<S, N, E, W>
 where
     S: Subscriber,
+    N: for<'writer> FormatFields<'writer> + 'static,
+    E: FormatEvent<N> + 'static,
+    W: MakeWriter + 'static,
 {
+    fn build(self) -> ConsoleLayer<S, N, E, W> {
+        ConsoleLayer {
+            is_interested: self.is_interested,
+            inner: self.inner,
+            make_writer: self.make_writer,
+            fmt_fields: self.fmt_fields,
+            fmt_event: self.fmt_event,
+        }
+    }
+}
+
+impl Default for ConsoleLayerBuilder {
     fn default() -> Self {
         Self {
             is_interested: Box::new(|_| true),
             inner: PhantomData,
+            fmt_fields: format::DefaultFields::default(),
+            fmt_event: format::Format::default(),
+            make_writer: io::stdout,
         }
     }
 }
 
-impl<S> Layer<S> for ConsoleLayer<S>
+// === impl Formatter ===
+
+impl<S, N, E, W> ConsoleLayer<S, N, E, W>
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
+    N: for<'writer> FormatFields<'writer> + 'static,
+    E: FormatEvent<N> + 'static,
+    W: MakeWriter + 'static,
+{
+    #[inline]
+    fn ctx(&self) -> context::Context<'_, N> {
+        unimplemented!()
+        // context::Context::new(&self.spans, &self.fmt_fields)
+    }
+}
+
+impl<S, N, E, W> Layer<S> for ConsoleLayer<S, N, E, W>
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+    N: for<'writer> FormatFields<'writer> + 'static,
+    E: FormatEvent<N> + 'static,
+    W: MakeWriter + 'static,
 {
     fn on_close(&self, id: Id, ctx: Context<S>) {}
 
     fn on_event(&self, event: &Event, ctx: Context<S>) {
+        thread_local! {
+            static BUF: RefCell<String> = RefCell::new(String::new());
+        }
+
         if (self.is_interested)(event) {
-            println!("{:?}", event);
+            BUF.with(|buf| {
+                let borrow = buf.try_borrow_mut();
+                let mut a;
+                let mut b;
+                let buf = match borrow {
+                    Ok(buf) => {
+                        a = buf;
+                        &mut *a
+                    }
+                    _ => {
+                        b = String::new();
+                        &mut b
+                    }
+                };
+
+                if self.fmt_event.format_event(&self.ctx(), buf, event).is_ok() {
+                    let mut writer = self.make_writer.make_writer();
+                    let _ = io::Write::write_all(&mut writer, buf.as_bytes());
+                }
+
+                buf.clear();
+            });
         }
     }
 }
@@ -228,7 +311,7 @@ pub trait Extensions {
 }
 
 #[derive(Debug)]
-struct Registry {
+pub struct Registry {
     spans: Arc<Slab<BigSpan>>,
     local_spans: RwLock<SpanStack>,
 }
@@ -441,13 +524,15 @@ impl<'a> LookupSpan<'a> for Registry {
 fn main() {
     let stderr = ConsoleLayer::builder()
         .with_interest(|event| event.metadata().level() == &Level::ERROR)
+        .with_writer(io::stderr)
         .build();
 
     let stdout = ConsoleLayer::builder()
         .with_interest(|event| event.metadata().level() == &Level::INFO)
+        .with_writer(io::stdout)
         .build();
 
-    let subscriber = stdout.and_then(stderr).with_subscriber(Registry::default());
+    let subscriber = stderr.and_then(stdout).with_subscriber(Registry::default());
     tracing::subscriber::set_global_default(subscriber).expect("Could not set global default");
 
     let span = span!(Level::INFO, "my_loop");
