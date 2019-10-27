@@ -9,7 +9,6 @@ use std::fmt;
 use std::io;
 use std::sync::{Arc, Mutex};
 
-use io::Stdout;
 use std::marker::PhantomData;
 use tracing::field::{Field, Visit};
 use tracing::span::Id;
@@ -65,80 +64,68 @@ where
     }
 }
 
-pub struct ConsoleLayer<S: Subscriber, W>
+pub struct ConsoleLayer<S: Subscriber>
 where
-    W: MakeWriter + Send + Sync,
+    S: Subscriber,
 {
     is_interested: Box<dyn Fn(&Event<'_>) -> bool + Send + Sync + 'static>,
-    make_writer: W,
     inner: PhantomData<S>,
 }
 
-pub struct ConsoleLayerBuilder<S, W>
+pub struct ConsoleLayerBuilder<S>
 where
     S: Subscriber,
-    W: MakeWriter + Send + Sync,
 {
     is_interested: Box<dyn Fn(&Event<'_>) -> bool + Send + Sync + 'static>,
-    make_writer: W,
     inner: PhantomData<S>,
 }
 
-impl<S, W> ConsoleLayer<S, W>
+impl<S> ConsoleLayer<S>
 where
     S: Subscriber,
-    W: MakeWriter + Send + Sync,
 {
-    fn builder() -> ConsoleLayerBuilder<S, W> {
+    fn builder() -> ConsoleLayerBuilder<S> {
         ConsoleLayerBuilder::default()
     }
 }
 
-impl<S, W> ConsoleLayerBuilder<S, W>
+impl<S> ConsoleLayerBuilder<S>
 where
     S: Subscriber,
-    W: MakeWriter + Send + Sync,
 {
-    fn with_interest<F>(&mut self, f: F) -> &mut Self
+    fn with_interest<F>(self, f: F) -> Self
     where
         F: Fn(&Event<'_>) -> bool + Send + Sync + 'static,
     {
-        self.is_interested = Box::new(f);
-        self
+        Self {
+            is_interested: Box::new(f),
+            ..self
+        }
     }
 
-    fn with_writer(&mut self, w: W) -> &mut Self {
-        self.make_writer = w;
-        self
-    }
-
-    fn build(self) -> ConsoleLayer<S, W> {
+    fn build(self) -> ConsoleLayer<S> {
         ConsoleLayer {
             is_interested: self.is_interested,
-            make_writer: self.make_writer,
             inner: self.inner,
         }
     }
 }
 
-impl<S, W> Default for ConsoleLayerBuilder<S, W>
+impl<S> Default for ConsoleLayerBuilder<S>
 where
     S: Subscriber,
-    W: MakeWriter + Send + Sync,
 {
     fn default() -> Self {
         Self {
             is_interested: Box::new(|_| true),
             inner: PhantomData,
-            make_writer: io::stdout,
         }
     }
 }
 
-impl<S, W> Layer<S> for ConsoleLayer<S, W>
+impl<S> Layer<S> for ConsoleLayer<S>
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
-    W: MakeWriter + Send + Sync + 'static,
 {
     fn on_close(&self, id: Id, ctx: Context<S>) {}
 
@@ -341,17 +328,15 @@ impl<'a> LookupSpan<'a> for Registry {
 }
 
 fn main() {
-    // let stderr = ConsoleLayer::builder()
-    //     .with_interest(|event| event.metadata().level() == &Level::ERROR)
-    //     .with_writer(io::stdout)
-    //     .build();
+    let stderr = ConsoleLayer::builder()
+        .with_interest(|event| event.metadata().level() == &Level::ERROR)
+        .build();
 
     let stdout = ConsoleLayer::builder()
         .with_interest(|event| event.metadata().level() == &Level::INFO)
-        .with_writer(io::stdout())
         .build();
 
-    let subscriber = stdout.with_subscriber(Registry::default());
+    let subscriber = stdout.and_then(stderr).with_subscriber(Registry::default());
     tracing::subscriber::set_global_default(subscriber).expect("Could not set global default");
 
     let span = span!(Level::INFO, "my_loop");
