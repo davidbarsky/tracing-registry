@@ -2,8 +2,7 @@
 
 use ansi_term::Style;
 use chrono;
-use std::fmt;
-use std::time::Instant;
+use std::{fmt, time::Instant};
 
 /// A type that can measure and format the current time.
 ///

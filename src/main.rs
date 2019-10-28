@@ -1,3 +1,5 @@
+#![feature(arbitrary_self_types)]
+
 use serde_json::{json, Value};
 use sharded_slab::{Guard, Slab};
 
@@ -18,7 +20,7 @@ use tracing::{
     span::Id,
     Event, Level, Metadata,
 };
-use tracing_core::{Interest, Subscriber};
+use tracing_core::{field::FieldSet, Interest, Subscriber};
 use tracing_subscriber::{layer::Context, Layer};
 
 pub mod context;
@@ -192,7 +194,6 @@ where
     #[inline]
     fn ctx(&self) -> context::Context<'_, N> {
         unimplemented!()
-        // context::Context::new(&self.spans, &self.fmt_fields)
     }
 }
 
@@ -290,6 +291,42 @@ pub struct BigSpan {
     metadata: &'static Metadata<'static>,
     values: Mutex<HashMap<&'static str, Value>>,
     events: Mutex<Vec<BigEvent>>,
+}
+
+impl BigSpan {
+    pub fn name(&self) -> &'static str {
+        self.metadata.name()
+    }
+
+    pub fn fields(&self) -> &FieldSet {
+        self.metadata.fields()
+    }
+
+    #[inline(always)]
+    fn with_parent<'registry, F, E>(
+        self: Guard<'registry, BigSpan>,
+        my_id: &Id,
+        last_id: Option<&Id>,
+        f: &mut F,
+        registry: &'registry Registry,
+    ) -> Result<(), E>
+    where
+        F: FnMut(&Id, Guard<'_, BigSpan>) -> Result<(), E>,
+    {
+        if let Some(parent_id) = self.parent() {
+            if Some(parent_id) != last_id {
+                if let Some(parent) = registry.get(parent_id) {
+                    parent.with_parent(parent_id, Some(my_id), f, registry)?;
+                } else {
+                    panic!("missing span for {:?}; this is a bug", parent_id);
+                }
+            }
+        }
+        if let Some(span) = registry.get(my_id) {
+            f(my_id, span);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]

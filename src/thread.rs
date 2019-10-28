@@ -1,9 +1,9 @@
 use crate::sync::RwLock;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
     cell::{Cell, UnsafeCell},
     fmt,
     marker::PhantomData,
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 #[macro_use]

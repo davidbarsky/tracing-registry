@@ -11,7 +11,7 @@
 pub(crate) use std::sync::{LockResult, PoisonError, TryLockResult};
 
 #[cfg(not(feature = "parking_lot"))]
-pub(crate) use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+pub(crate) use std::sync::RwLock;
 
 #[cfg(feature = "parking_lot")]
 pub(crate) use self::parking_lot_impl::*;

@@ -22,49 +22,49 @@ use tracing_log::NormalizeEvent;
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
 pub struct Json;
 
-impl<N, T> FormatEvent<N> for Format<Json, T>
-where
-    N: for<'writer> FormatFields<'writer>,
-    T: FormatTime,
-{
-    fn format_event(
-        &self,
-        ctx: &span::Context<'_, N>,
-        writer: &mut dyn fmt::Write,
-        event: &Event<'_>,
-    ) -> fmt::Result {
-        use tracing_serde::fields::AsMap;
-        let mut timestamp = String::new();
-        self.timer.format_time(&mut timestamp)?;
+// impl<N, T> FormatEvent<N> for Format<Json, T>
+// where
+//     N: for<'writer> FormatFields<'writer>,
+//     T: FormatTime,
+// {
+//     fn format_event(
+//         &self,
+//         ctx: &span::Context<'_, N>,
+//         writer: &mut dyn fmt::Write,
+//         event: &Event<'_>,
+//     ) -> fmt::Result {
+//         use tracing_serde::fields::AsMap;
+//         let mut timestamp = String::new();
+//         self.timer.format_time(&mut timestamp)?;
 
-        #[cfg(feature = "tracing-log")]
-        let normalized_meta = event.normalized_metadata();
-        #[cfg(feature = "tracing-log")]
-        let meta = normalized_meta.as_ref().unwrap_or_else(|| event.metadata());
-        #[cfg(not(feature = "tracing-log"))]
-        let meta = event.metadata();
+//         #[cfg(feature = "tracing-log")]
+//         let normalized_meta = event.normalized_metadata();
+//         #[cfg(feature = "tracing-log")]
+//         let meta = normalized_meta.as_ref().unwrap_or_else(|| event.metadata());
+//         #[cfg(not(feature = "tracing-log"))]
+//         let meta = event.metadata();
 
-        let mut visit = || {
-            let mut serializer = Serializer::new(WriteAdaptor::new(writer));
-            let mut serializer = serializer.serialize_map(None)?;
+//         let mut visit = || {
+//             let mut serializer = Serializer::new(WriteAdaptor::new(writer));
+//             let mut serializer = serializer.serialize_map(None)?;
 
-            serializer.serialize_entry("timestamp", &timestamp)?;
-            serializer.serialize_entry("level", &meta.level().as_serde())?;
+//             serializer.serialize_entry("timestamp", &timestamp)?;
+//             serializer.serialize_entry("level", &meta.level().as_serde())?;
 
-            ctx.with_current(|(_, span)| serializer.serialize_entry("span", &span))
-                .unwrap_or(Ok(()))?;
+//             ctx.with_current(|(_, span)| serializer.serialize_entry("span", &span))
+//                 .unwrap_or(Ok(()))?;
 
-            if self.display_target {
-                serializer.serialize_entry("target", meta.target())?;
-            }
+//             if self.display_target {
+//                 serializer.serialize_entry("target", meta.target())?;
+//             }
 
-            serializer.serialize_entry("fields", &event.field_map())
-        };
+//             serializer.serialize_entry("fields", &event.field_map())
+//         };
 
-        visit().map_err(|_| fmt::Error)?;
-        writeln!(writer)
-    }
-}
+//         visit().map_err(|_| fmt::Error)?;
+//         writeln!(writer)
+//     }
+// }
 
 /// The JSON [`FormatFields`] implementation.
 ///
