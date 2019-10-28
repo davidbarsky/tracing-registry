@@ -1,0 +1,17 @@
+on: [push]
+
+name: CI
+
+jobs:
+  install_nightly:
+    name: Install Nightly
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@master
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly
+          override: true
+          components: cargo, clippy
+          command: build
