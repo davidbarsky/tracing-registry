@@ -12,7 +12,7 @@ log = ["tracing-log"]
 json = ["serde", "tracing-serde"]
 
 [dependencies]
-sharded-slab = "0.0.4"
+sharded-slab = { git = "https://github.com/davidbarsky/sharded-slab" }
 tracing = { git = "https://github.com/tokio-rs/tracing" }
 tracing-subscriber = { git = "https://github.com/tokio-rs/tracing" }
 tracing-serde = { git = "https://github.com/tokio-rs/tracing", optional = true }

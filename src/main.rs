@@ -246,7 +246,7 @@ pub trait SpanData<'a> {
     type Children: Iterator<Item = &'a Id>;
     type Follows: Iterator<Item = &'a Id>;
 
-    fn id(&self) -> &Id;
+    fn id(&self) -> Id;
     fn metadata(&self) -> &'static Metadata<'static>;
     fn parent(&self) -> Option<&Id>;
     fn children(&'a self) -> Self::Children;
@@ -267,8 +267,9 @@ impl<'a> SpanData<'a> for Guard<'a, BigSpan> {
     type Children = std::slice::Iter<'a, Id>; // not yet implemented...
     type Follows = std::slice::Iter<'a, Id>;
 
-    fn id(&self) -> &Id {
-        unimplemented!("david: add this to `BigSpan`")
+    fn id(&self) -> Id {
+        let id: u64 = self.idx().try_into().unwrap();
+        Id::from_u64(id)
     }
     fn metadata(&self) -> &'static Metadata<'static> {
         (*self).metadata
@@ -324,10 +325,14 @@ impl Default for Registry {
         }
     }
 }
+#[inline]
+fn idx_to_id(idx: usize) -> Id {
+    Id::from_u64(idx as u64 + 1)
+}
 
-fn convert_id(id: Id) -> usize {
-    let id: usize = id.into_u64().try_into().unwrap();
-    id - 1
+#[inline]
+fn id_to_idx(id: &Id) -> usize {
+    id.into_u64() as usize - 1
 }
 
 impl Registry {
@@ -336,12 +341,11 @@ impl Registry {
     }
 
     fn get(&self, id: &Id) -> Option<Guard<BigSpan>> {
-        self.spans.get(convert_id(id.clone()))
+        self.spans.get(id_to_idx(id))
     }
 
     fn take(&self, id: Id) -> Option<BigSpan> {
-        let id = convert_id(id);
-        self.spans.take(id)
+        self.spans.take(id_to_idx(&id))
     }
 }
 
@@ -508,7 +512,7 @@ impl Subscriber for Registry {
 
     #[inline]
     fn try_close(&self, id: span::Id) -> bool {
-        let span = self.take(id);
+        let _ = self.take(id);
         true
     }
 }
@@ -523,7 +527,7 @@ impl<'a> LookupSpan<'a> for Registry {
 
 fn main() {
     let stderr = ConsoleLayer::builder()
-        .with_interest(|event| event.metadata().level() == &Level::ERROR)
+        .with_interest(|event| event.metadata().level() >= &Level::WARN)
         .with_writer(io::stderr)
         .build();
 

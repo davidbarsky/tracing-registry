@@ -8,11 +8,10 @@ use crate::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use owning_ref::OwningHandle;
 
 use std::collections::HashSet;
-pub(crate) use tracing_core::span::{Attributes, Current, Id, Record};
+pub(crate) use tracing_core::span::{Attributes, Id, Record};
 use tracing_core::{dispatcher, Metadata};
 
 use super::format::FormatFields;
-use super::Registry;
 
 #[macro_use]
 macro_rules! try_lock {
