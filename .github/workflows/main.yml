@@ -10,5 +10,8 @@ jobs:
       - uses: actions/checkout@master
       - uses: actions-rs/cargo@v1
         with:
+          profile: minimal
+          toolchain: nightly
+          override: true
+          components: rustfmt, clippy
           command: build
-          args: --release --all-features
