@@ -227,12 +227,15 @@ where
                     }
                 };
 
-                if self.fmt_event.format_event(&self.ctx(), buf, event).is_ok() {
-                    let mut writer = self.make_writer.make_writer();
-                    let _ = io::Write::write_all(&mut writer, buf.as_bytes());
-                }
+                let span = ctx.current_span();
+                println!("Event: {:?} in Span: {:?}", event, span);
 
-                buf.clear();
+                // if self.fmt_event.format_event(&self.ctx(), buf, event).is_ok() {
+                //     let mut writer = self.make_writer.make_writer();
+                //     let _ = io::Write::write_all(&mut writer, buf.as_bytes());
+                // }
+
+                // buf.clear();
             });
         }
     }
@@ -564,7 +567,7 @@ impl<'a> LookupSpan<'a> for Registry {
 
 fn main() {
     let stderr = ConsoleLayer::builder()
-        .with_interest(|event| event.metadata().level() >= &Level::WARN)
+        .with_interest(|event| event.metadata().level() <= &Level::WARN)
         .with_writer(io::stderr)
         .build();
 
@@ -573,7 +576,7 @@ fn main() {
         .with_writer(io::stdout)
         .build();
 
-    let subscriber = stderr.and_then(stdout).with_subscriber(Registry::default());
+    let subscriber = stdout.and_then(stderr).with_subscriber(Registry::default());
     tracing::subscriber::set_global_default(subscriber).expect("Could not set global default");
 
     let span = span!(Level::INFO, "my_loop");
